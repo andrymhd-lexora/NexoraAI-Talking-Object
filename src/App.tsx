@@ -673,7 +673,14 @@ export default function App() {
 
   const getGeminiClient = () => {
     const key = geminiApiKey || process.env.GEMINI_API_KEY || "";
-    return new GoogleGenAI({ apiKey: key });
+    return new GoogleGenAI({ 
+      apiKey: key,
+      httpOptions: {
+        headers: {
+          'User-Agent': 'aistudio-build',
+        }
+      }
+    });
   };
 
   const ai = getGeminiClient();
@@ -1551,7 +1558,7 @@ export default function App() {
 
       const genAI = getGeminiClient();
       const response = await genAI.models.generateContent({
-        model: "gemini-3.1-pro-preview",
+        model: "gemini-3.5-flash",
         contents: prompt,
       });
 
