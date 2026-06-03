@@ -59,7 +59,9 @@ import {
   Key,
   Eye,
   EyeOff,
-  Settings
+  Settings,
+  ExternalLink,
+  X
 } from "lucide-react";
 import { cn } from "@/src/lib/utils";
 import ReactMarkdown from "react-markdown";
@@ -599,7 +601,11 @@ export default function App() {
   const [copied, setCopied] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [history, setHistory] = useState<any[]>([]);
+  const [historyLoading, setHistoryLoading] = useState<boolean>(true);
   const [showHistory, setShowHistory] = useState(false);
+  const [showFreeTrialNotification, setShowFreeTrialNotification] = useState<boolean>(false);
+  const [showAppreciationNotification, setShowAppreciationNotification] = useState<boolean>(false);
+  const notificationDecisionUid = useRef<string | null>(null);
   const [isVoicePlaying, setIsVoicePlaying] = useState(false);
   const [isEditing, setIsEditing] = useState(false);
   const [sceneImages, setSceneImages] = useState<Record<number, string>>({});
@@ -629,6 +635,34 @@ export default function App() {
   const [generatingLink, setGeneratingLink] = useState<boolean>(false);
   const [loggingOut, setLoggingOut] = useState<boolean>(false);
   const [showSettingsModal, setShowSettingsModal] = useState<boolean>(false);
+
+  // Auto notification system based on join status (new user vs returning user)
+  useEffect(() => {
+    if (!historyLoading && authInitialized) {
+      const currentId = user ? user.uid : "visitor";
+      if (notificationDecisionUid.current !== currentId) {
+        notificationDecisionUid.current = currentId;
+        
+        if (user && history.length > 0) {
+          // Returning user (akun lama)
+          setShowFreeTrialNotification(false);
+          setShowAppreciationNotification(true);
+          const timer = setTimeout(() => {
+            setShowAppreciationNotification(false);
+          }, 30000);
+          return () => clearTimeout(timer);
+        } else {
+          // New user (akun baru pertama join) or visitor
+          setShowFreeTrialNotification(true);
+          setShowAppreciationNotification(false);
+          const timer = setTimeout(() => {
+            setShowFreeTrialNotification(false);
+          }, 30000);
+          return () => clearTimeout(timer);
+        }
+      }
+    }
+  }, [user, historyLoading, authInitialized, history.length]);
 
   // Mayar webhook setup and simulation states
   const [simEmail, setSimEmail] = useState<string>("");
@@ -685,10 +719,15 @@ export default function App() {
   }, [darkMode]);
 
   useEffect(() => {
-    if (step === 13 && user && !result && !isGenerating) {
+    if (step === 13 && user && !result && !isGenerating && !historyLoading && hasPaid !== null) {
+      const isTrial = history.length === 0;
+      if (!hasPaid && !isTrial) {
+        console.log("Generation blocked, payment is required (trial used).");
+        return;
+      }
       generateStory(selections);
     }
-  }, [step, user, result, isGenerating, selections]);
+  }, [step, user, result, isGenerating, selections, historyLoading, hasPaid, history.length]);
 
   const [showPassword, setShowPassword] = useState<boolean>(false);
   const [inputKey, setInputKey] = useState<string>(geminiApiKey);
@@ -753,7 +792,8 @@ export default function App() {
     }
     
     setCheckingPayment(true);
-    try {
+    
+    const checkPromise = (async () => {
       // 1. Core check: Query our backend payment status endpoint (handles Firestore and in-memory fallback)
       try {
         const response = await fetch(`/api/payment/status?email=${encodeURIComponent(emailLower)}`);
@@ -769,10 +809,9 @@ export default function App() {
             if (data.isPaid) {
               localStorage.setItem(cacheKey, "true");
               setHasPaid(true);
-              setCheckingPayment(false);
               return;
             } else {
-              // Server reported not paid yet - do not return early, cascade to direct client-side checking to ensure absolutely no false-negatives
+              // Server reported not paid yet - do not return early, cascade to double check
               console.log("Server status reported unpaid; cascading to double check direct client-side Firestore...");
             }
           } else if (data && data.dbFailed) {
@@ -799,13 +838,20 @@ export default function App() {
         localStorage.removeItem(cacheKey);
         setHasPaid(false);
       }
+    })();
+
+    const timeoutPromise = new Promise((_, reject) => 
+      setTimeout(() => reject(new Error("Timeout verifikasi payment (3.5s)")), 3500)
+    );
+
+    try {
+      await Promise.race([checkPromise, timeoutPromise]);
     } catch (err: any) {
-      console.error("Gagal mengecek status pembayaran:", err);
-      // Keep cached status if query fails to preserve robust offline experience
+      console.warn("Status check timed out or errored:", err);
+      // Fallback is extremely robust: if cached paid is true, keep it, else set to false to let user access trial
       if (isCachedPaid === "true") {
         setHasPaid(true);
       } else {
-        setError("Gagal melakukan verifikasi status pembayaran: " + (err?.message || String(err)));
         setHasPaid(false);
       }
     } finally {
@@ -932,15 +978,15 @@ export default function App() {
       }
 
       if (response.ok && data.link) {
-        window.location.href = data.link;
+        window.open(data.link, "_blank");
       } else {
         console.warn("Gagal membuat link via server, mengalihkan ke link direct:", data.error || "Terjadi kesalahan");
-        window.location.href = fallbackUrl;
+        window.open(fallbackUrl, "_blank");
       }
     } catch (err: any) {
       console.warn("Gagal membuat link pembayaran melalui server (menggunakan direct redirect):", err);
       // Seamlessly redirect the user directly to the Mayar checkout page!
-      window.location.href = fallbackUrl;
+      window.open(fallbackUrl, "_blank");
     } finally {
       setGeneratingLink(false);
     }
@@ -1038,6 +1084,8 @@ export default function App() {
         }
       } else {
         setHasPaid(null);
+        setHistoryLoading(false);
+        setHistory([]);
       }
       setAuthInitialized(true);
     });
@@ -1054,19 +1102,50 @@ export default function App() {
   }, [authInitialized, geminiApiKey]);
 
   const fetchHistory = async (uid: string) => {
-    try {
-      const q = query(collection(db, "stories"), where("userId", "==", uid), orderBy("createdAt", "desc"));
+    setHistoryLoading(true);
+    setHistory([]); // Reset list immediately on invoke to prevent cross-user leakage
+    
+    const fetchPromise = (async () => {
       let querySnapshot;
       try {
-        querySnapshot = await getDocs(q);
-      } catch (err) {
-        handleFirestoreError(err, OperationType.GET, "stories");
-        return;
+        // Try query with order first
+        const qWithOrder = query(collection(db, "stories"), where("userId", "==", uid), orderBy("createdAt", "desc"));
+        querySnapshot = await getDocs(qWithOrder);
+      } catch (errWithOrder) {
+        console.warn("Query with orderBy failed, attempting unsorted query fallback to bypass any missing indices...", errWithOrder);
+        try {
+          // Fallback to simple unsorted query
+          const qSimple = query(collection(db, "stories"), where("userId", "==", uid));
+          querySnapshot = await getDocs(qSimple);
+        } catch (errSimple) {
+          handleFirestoreError(errSimple, OperationType.GET, "stories");
+          return;
+        }
       }
-      const docs = querySnapshot.docs.map(d => ({ id: d.id, ...d.data() }));
+      
+      const docs = querySnapshot.docs.map(d => ({ id: d.id, ...d.data() as any }));
+      // Sort client-side in-memory to guarantee correct chronological order even if index is not configured
+      docs.sort((a, b) => {
+        const timeA = a.createdAt?.seconds ? a.createdAt.seconds * 1000 : (a.createdAt ? new Date(a.createdAt).getTime() : 0);
+        const timeB = b.createdAt?.seconds ? b.createdAt.seconds * 1000 : (b.createdAt ? new Date(b.createdAt).getTime() : 0);
+        return timeB - timeA;
+      });
+      
       setHistory(docs);
+    })();
+
+    const timeoutPromise = new Promise((_, reject) => 
+      setTimeout(() => reject(new Error("Timeout fetch history (3.5s)")), 3500)
+    );
+
+    try {
+      await Promise.race([fetchPromise, timeoutPromise]);
     } catch (err) {
-      console.error("Error fetching history:", err);
+      console.warn("Fetch history timed out or errored:", err);
+      // On timeout/error, fallback to empty array to ensure first-time user's progress is not blocked
+      setHistory(prev => prev.length > 0 ? prev : []);
+    } finally {
+      setHistoryLoading(false);
     }
   };
 
@@ -1108,6 +1187,7 @@ export default function App() {
       // Instant UI feedback: Reset user states immediately so it feels snappy
       setUser(null);
       setHasPaid(null);
+      setHistory([]);
       await auth.signOut();
     } catch (err) {
       console.error("Gagal melakukan log out:", err);
@@ -2166,6 +2246,61 @@ export default function App() {
 
   return (
     <div className="min-h-screen bg-[#F8FAFC] dark:bg-[#070B13] text-[#1E293B] dark:text-slate-100 font-sans selection:bg-pink-500/20 dot-pattern transition-colors duration-300">
+      {/* Trial Notification Banner */}
+      <AnimatePresence>
+        {showFreeTrialNotification && (
+          <motion.div
+            initial={{ opacity: 0, y: 50, scale: 0.95 }}
+            animate={{ opacity: 1, y: 0, scale: 1 }}
+            exit={{ opacity: 0, y: 20, scale: 0.95 }}
+            className="fixed bottom-6 right-6 z-50 w-[calc(100%-3rem)] sm:w-96 bg-gradient-to-r from-blue-600 to-indigo-650 text-white p-4 rounded-2xl shadow-2xl shadow-indigo-500/15 flex items-center justify-between gap-3 border border-white/10"
+          >
+            <div className="flex items-center gap-3">
+              <div className="bg-white/15 p-2 rounded-xl shrink-0">
+                <Sparkles className="w-5 h-5 text-amber-300 animate-pulse" />
+              </div>
+              <div className="flex flex-col text-left">
+                <span className="text-[12px] font-black tracking-widest uppercase text-amber-200">🎁 TRIAL GRATIS</span>
+                <span className="text-xs font-bold text-slate-100 leading-normal mt-0.5">Free 1x proses di awal untuk mencoba seluruh kecanggihan fitur secara gratis!</span>
+              </div>
+            </div>
+            <button
+              onClick={() => setShowFreeTrialNotification(false)}
+              className="p-1.5 hover:bg-white/10 rounded-lg transition-colors cursor-pointer shrink-0"
+              title="Tutup Notifikasi"
+            >
+              <X className="w-4 h-4 text-slate-200 hover:text-white" />
+            </button>
+          </motion.div>
+        )}
+
+        {showAppreciationNotification && (
+          <motion.div
+            initial={{ opacity: 0, y: 50, scale: 0.95 }}
+            animate={{ opacity: 1, y: 0, scale: 1 }}
+            exit={{ opacity: 0, y: 20, scale: 0.95 }}
+            className="fixed bottom-6 right-6 z-50 w-[calc(100%-3rem)] sm:w-96 bg-gradient-to-r from-rose-500 to-pink-600 text-white p-4 rounded-2xl shadow-2xl shadow-rose-500/15 flex items-center justify-between gap-3 border border-white/10"
+          >
+            <div className="flex items-center gap-3">
+              <div className="bg-white/15 p-2 rounded-xl shrink-0">
+                <Heart className="w-5 h-5 text-pink-200 animate-pulse fill-pink-200" />
+              </div>
+              <div className="flex flex-col text-left">
+                <span className="text-[12px] font-black tracking-widest uppercase text-pink-200">💖 TERIMA KASIH</span>
+                <span className="text-xs font-bold text-slate-100 leading-normal mt-0.5">Terima kasih atas kesetiaan Anda menggunakan layanan kami untuk berkreasi luar biasa!</span>
+              </div>
+            </div>
+            <button
+              onClick={() => setShowAppreciationNotification(false)}
+              className="p-1.5 hover:bg-white/10 rounded-lg transition-colors cursor-pointer shrink-0"
+              title="Tutup Notifikasi"
+            >
+              <X className="w-4 h-4 text-slate-200 hover:text-white" />
+            </button>
+          </motion.div>
+        )}
+      </AnimatePresence>
+
       {/* Background Shapes */}
       <div className="fixed inset-0 overflow-hidden pointer-events-none">
         <div className="absolute top-[-10%] left-[-10%] w-[50%] h-[50%] bg-blue-200/40 dark:bg-blue-950/20 blur-[120px] rounded-full animate-pulse" />
@@ -2380,13 +2515,25 @@ export default function App() {
             </motion.div>
           ) : (
             <motion.div
-              key={!user ? "login-card" : (hasPaid === false ? "payment-wall" : step)}
+              key={
+                step < 13
+                  ? step
+                  : !user
+                  ? "login-card"
+                  : (historyLoading || hasPaid === null)
+                  ? "loading-payment"
+                  : (!hasPaid && history.length >= 1)
+                  ? "payment-wall"
+                  : step
+              }
               initial={{ opacity: 0, y: 20 }}
               animate={{ opacity: 1, y: 0 }}
               exit={{ opacity: 0, y: -20 }}
               className="w-full"
             >
-              {!user ? (
+              {step < 13 ? (
+                renderStep()
+              ) : !user ? (
                 <div className="flex flex-col items-center justify-center p-8 sm:p-12 bg-white dark:bg-slate-900/60 rounded-[2.5rem] border-2 border-blue-100/40 dark:border-slate-800/60 shadow-xl max-w-2xl mx-auto text-center gap-6 relative mt-6">
                   <div className="flex flex-col items-center gap-4 select-none">
                     {/* Pink 3D Icon but larger */}
@@ -2429,64 +2576,67 @@ export default function App() {
                     *Mendukung sinkronisasi instan demi kemudahan akses naskah & model 3D di berbagai perangkat.
                   </p>
                 </div>
-              ) : hasPaid === null ? (
+              ) : (historyLoading || hasPaid === null) ? (
                 <div className="flex flex-col items-center justify-center p-12 bg-white dark:bg-slate-900/60 rounded-[2.5rem] border-2 border-blue-100/40 dark:border-slate-800/60 shadow-xl max-w-lg mx-auto text-center gap-4">
                   <Loader2 className="w-10 h-10 text-blue-500 animate-spin" />
                   <p className="font-bold text-[#1E293B] dark:text-white">Memverifikasi Status Berlangganan...</p>
                 </div>
-              ) : hasPaid === false ? (
-                <div className="flex flex-col items-center justify-center p-8 sm:p-12 bg-white dark:bg-slate-900/60 rounded-[2.5rem] border-2 border-blue-100/40 dark:border-slate-800/60 shadow-xl max-w-2xl mx-auto text-center gap-6 relative mt-6">
-                  <div className="flex flex-col items-center gap-4 select-none">
+              ) : (!hasPaid && history.length >= 1) ? (
+                <div className="flex flex-col items-center justify-center p-8 sm:p-10 bg-white dark:bg-slate-900/60 rounded-[2.5rem] border-2 border-blue-100/40 dark:border-slate-800/60 shadow-xl max-w-md mx-auto text-center gap-5 relative mt-6">
+                  <div className="flex flex-col items-center gap-3 select-none">
                     {/* Pink 3D Icon with Crown badge */}
-                    <div className="relative w-20 h-20 bg-gradient-to-br from-[#FF5E9D] to-[#FF2A73] rounded-3xl flex items-center justify-center shadow-2xl shadow-pink-500/30 transform -rotate-3">
-                      <span className="absolute top-2.5 right-2.5 w-2.5 h-2.5 bg-white/80 rounded-full blur-[0.5px]" />
-                      <Video className="w-10 h-10 text-white filter drop-shadow-[0_4px_6px_rgba(0,0,0,0.15)]" />
-                      <div className="absolute -bottom-1 -right-1 bg-amber-400 text-slate-900 p-1.5 rounded-xl shadow-lg border-2 border-white dark:border-slate-900 animate-bounce">
-                        <Crown className="w-4 h-4" />
+                    <div className="relative w-16 h-16 bg-gradient-to-br from-[#FF5E9D] to-[#FF2A73] rounded-2xl flex items-center justify-center shadow-lg shadow-pink-500/30 transform -rotate-3">
+                      <span className="absolute top-2 right-2 w-2 h-2 bg-white/80 rounded-full blur-[0.5px]" />
+                      <Video className="w-8 h-8 text-white filter drop-shadow-[0_4px_6px_rgba(0,0,0,0.15)]" />
+                      <div className="absolute -bottom-1 -right-1 bg-amber-400 text-slate-900 p-1 rounded-lg shadow-lg border border-white dark:border-slate-900 animate-bounce">
+                        <Crown className="w-3.5 h-3.5" />
                       </div>
                     </div>
                     
-                    <div className="flex flex-col items-center text-center mt-2">
+                    <div className="flex flex-col items-center text-center mt-1">
                       <div className="flex items-baseline leading-none">
-                        <span className="text-2xl sm:text-3xl font-black text-[#1E293B] dark:text-white tracking-tight">Nexora</span>
-                        <span className="text-2xl sm:text-3xl font-black text-[#FF4D8D] tracking-tight">Ai</span>
+                        <span className="text-xl sm:text-2xl font-black text-[#1E293B] dark:text-white tracking-tight">Nexora</span>
+                        <span className="text-xl sm:text-2xl font-black text-[#FF4D8D] tracking-tight">Ai</span>
                       </div>
-                      <div className="flex items-center gap-1.5 mt-2 leading-none">
-                        <span className="text-xs sm:text-sm font-black text-slate-800 dark:text-slate-100 tracking-wider">TALKING OBJECT</span>
-                        <span className="text-xs sm:text-sm font-black text-indigo-500 dark:text-indigo-400">3D</span>
-                        <span className="bg-[#FF4D8D] text-white text-[9px] sm:text-[10px] font-black px-1.5 py-0.5 rounded sm:rounded-md uppercase">PRO</span>
+                      <div className="flex items-center gap-1 mt-1 leading-none">
+                        <span className="text-[10px] sm:text-xs font-black text-slate-800 dark:text-slate-100 tracking-wider">TALKING OBJECT 3D</span>
+                        <span className="bg-[#FF4D8D] text-white text-[8px] sm:text-[9px] font-black px-1 rounded uppercase">PRO</span>
                       </div>
-                      <span className="text-[9px] sm:text-[10px] text-[#94A3B8] dark:text-[#64748B] font-extrabold uppercase tracking-[0.4em] mt-2">
-                        Premium Member Access
-                      </span>
                     </div>
                   </div>
                   
-                  <div className="space-y-3">
-                    <p className="text-[#64748B] dark:text-slate-400 font-semibold leading-relaxed max-w-md mx-auto">
-                      Rancang objek 3D Pixar, buat skrip percakapan edukatif, dan hasilkan video viral short-form tanpa batas menggunakan kecerdasan buatan Gemini AI.
+                  {/* Penawaran spesial seumur hidup */}
+                  <div className="w-full bg-gradient-to-br from-[#FF4D8D]/10 to-indigo-500/10 p-4 rounded-2xl border-2 border-[#FF4D8D]/20 flex flex-col items-center gap-1.5 shadow-sm">
+                    <span className="text-[10px] font-black text-[#FF4D8D] uppercase tracking-[0.2em] bg-white dark:bg-slate-800 px-3 py-1 rounded-full shadow-sm">
+                      ⚡ PENAWARAN SPESIAL SEUMUR HIDUP
+                    </span>
+                    <span className="font-black text-[#1E293B] dark:text-white text-lg">
+                      Hanya <span className="text-[#FF4D8D] text-xl font-black">Rp 25 K</span>
+                    </span>
+                    <p className="text-[11.5px] font-bold text-slate-600 dark:text-slate-300 max-w-xs mt-0.5 leading-relaxed">
+                      Hanya Rp 25 K Anda bisa selamanya ciptakan kreasi digital yang ikonik dan powerful!
                     </p>
                   </div>
 
-                  <div className="w-full bg-blue-50/50 dark:bg-slate-800/40 p-5 rounded-2xl border border-blue-100/40 dark:border-slate-800 flex flex-col items-center gap-3">
-                    <span className="text-xs font-black text-blue-500 dark:text-blue-400 uppercase tracking-widest bg-blue-100/60 dark:bg-blue-900/40 px-3 py-1 rounded-full">
-                      Email Pembelian Anda
+                  <div className="w-full bg-blue-50/50 dark:bg-slate-800/40 p-4 rounded-xl border border-blue-100/40 dark:border-slate-800 flex flex-col items-center gap-1">
+                    <span className="text-[10px] font-black text-blue-500 dark:text-blue-400 uppercase tracking-widest bg-blue-100/60 dark:bg-blue-900/40 px-2 py-0.5 rounded-full">
+                      Email Akun
                     </span>
-                    <span className="font-bold text-[#1E293B] dark:text-white text-sm break-all">
+                    <span className="font-bold text-[#1E293B] dark:text-white text-xs break-all">
                       {user.email}
                     </span>
                   </div>
 
-                  <div className="flex flex-col sm:flex-row gap-3 w-full mt-2">
+                  <div className="flex flex-col sm:flex-row gap-3 w-full mt-1">
                     <button 
                       onClick={handlePayNow}
                       disabled={generatingLink || checkingPayment}
-                      className="flex-1 flex items-center justify-center gap-3 py-4 px-6 bg-blue-500 hover:bg-blue-600 text-white rounded-2xl font-black shadow-lg shadow-blue-500/20 transition-all playful-button disabled:opacity-50 cursor-pointer"
+                      className="flex-1 flex items-center justify-center gap-2 py-3 px-5 bg-blue-500 hover:bg-blue-600 text-white rounded-xl font-bold shadow-md shadow-blue-500/20 transition-all playful-button disabled:opacity-50 cursor-pointer text-sm"
                     >
                       {generatingLink ? (
-                        <Loader2 className="w-5 h-5 animate-spin" />
+                        <Loader2 className="w-4 h-4 animate-spin" />
                       ) : (
-                        <Zap className="w-5 h-5" />
+                        <ExternalLink className="w-3.5 h-3.5" />
                       )}
                       <span>{generatingLink ? "Membuat Link..." : "Bayar Sekarang (Mayar.id)"}</span>
                     </button>
@@ -2494,19 +2644,19 @@ export default function App() {
                     <button 
                       onClick={() => checkPaymentStatus(user)}
                       disabled={checkingPayment || generatingLink}
-                      className="flex-1 flex items-center justify-center gap-2 py-4 px-6 bg-slate-100 hover:bg-slate-200 dark:bg-slate-800 dark:hover:bg-slate-700 text-slate-700 dark:text-slate-200 rounded-2xl font-black border-2 border-slate-200 dark:border-slate-700 transition-all playful-button disabled:opacity-50 cursor-pointer"
+                      className="flex-1 flex items-center justify-center gap-1.5 py-3 px-5 bg-slate-100 hover:bg-slate-200 dark:bg-slate-800 dark:hover:bg-slate-700 text-slate-700 dark:text-slate-200 rounded-xl font-bold border border-slate-200 dark:border-slate-700 transition-all playful-button disabled:opacity-50 cursor-pointer text-sm"
                     >
                       {checkingPayment ? (
-                        <Loader2 className="w-5 h-5 animate-spin" />
+                        <Loader2 className="w-4 h-4 animate-spin" />
                       ) : (
-                        <RefreshCw className="w-5 h-5" />
+                        <RefreshCw className="w-3.5 h-3.5" />
                       )}
-                      <span>{checkingPayment ? "Mengecek..." : "Cek Status Pembayaran"}</span>
+                      <span>{checkingPayment ? "Mengecek..." : "Cek Status"}</span>
                     </button>
                   </div>
 
-                  <p className="text-xs font-semibold text-slate-400 dark:text-slate-500 mt-1">
-                    *Setelah pembayaran sukses di Mayar.id, klik tombol <strong>Cek Status Pembayaran</strong> untuk langsung mengaktifkan fitur Anda.
+                  <p className="text-[11px] font-semibold text-slate-400 dark:text-slate-500 mt-1 max-w-sm mx-auto">
+                    *Mayar.id akan terbuka di jendela baru. Setelah sukses membayar, klik <strong>Cek Status</strong> untuk langsung mengaktifkan fitur premium Anda.
                   </p>
                 </div>
               ) : (
