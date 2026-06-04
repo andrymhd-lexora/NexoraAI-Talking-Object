@@ -533,6 +533,89 @@ function SceneCard({
   );
 }
 
+const parseSceneField = (sceneText: string, fieldType: "image" | "video" | "dialogue"): string => {
+  const lines = sceneText.split("\n");
+  for (let line of lines) {
+    line = line.trim();
+    // Strip bullet points if any at the start, e.g. * or - or 1.
+    const cleanLine = line.replace(/^(?:[-*+•]|\d+\.)\s*/, "").trim();
+    const cleanHeader = cleanLine.replace(/^\*+/, "").replace(/\*+$/, "").trim();
+    
+    if (fieldType === "image") {
+      // Look for indicators of image prompt: 🖼, or words "image prompt", "prompt gambar", "deskripsi gambar", etc.
+      if (
+        /^(?:🖼|🖼️|image|gambar)/i.test(cleanHeader) || 
+        /(?:image\s*prompt|prompt\s*gambar|deskripsi\s*gambar|image\s*description|gambar\s*prompt)/i.test(cleanLine)
+      ) {
+        const colonIdx = cleanLine.indexOf(":");
+        if (colonIdx !== -1) {
+          let content = cleanLine.substring(colonIdx + 1).trim();
+          content = content.replace(/^\*+/, "").replace(/\*+$/, "").replace(/^['"]+/, "").replace(/['"]+$/, "").trim();
+          if (content) return content;
+        }
+      }
+    } else if (fieldType === "video") {
+      if (
+        /^(?:🎥|🎥️|video)/i.test(cleanHeader) || 
+        /(?:video\s*prompt|prompt\s*video|deskripsi\s*video|video\s*description)/i.test(cleanLine)
+      ) {
+        const colonIdx = cleanLine.indexOf(":");
+        if (colonIdx !== -1) {
+          let content = cleanLine.substring(colonIdx + 1).trim();
+          content = content.replace(/^\*+/, "").replace(/\*+$/, "").replace(/^['"]+/, "").replace(/['"]+$/, "").trim();
+          if (content) return content;
+        }
+      }
+    } else if (fieldType === "dialogue") {
+      if (
+        /^(?:💬|💬️|dialog|percayakah|suara|dialogue|bicara|percakapan)/i.test(cleanHeader) || 
+        /(?:dialogue|dialog|percakapan|suara|narasi|speech|bicara)/i.test(cleanLine)
+      ) {
+        const colonIdx = cleanLine.indexOf(":");
+        if (colonIdx !== -1) {
+          let content = cleanLine.substring(colonIdx + 1).trim();
+          content = content.replace(/^\*+/, "").replace(/\*+$/, "").replace(/^['"]+/, "").replace(/['"]+$/, "").trim();
+          if (content) return content;
+        }
+      }
+    }
+  }
+  
+  // Fallback regex match if the per-line check missed it
+  let regex;
+  if (fieldType === "image") {
+    regex = /(?:🖼|🖼️)?\s*\*?\*?\s*(?:Image\s*Prompt|Prompt\s*Gambar|Deskripsi\s*Gambar|Image\s*Description|Gambar)\s*\*?\*?\s*:\s*(.*)/i;
+  } else if (fieldType === "video") {
+    regex = /(?:🎥|🎥️)?\s*\*?\*?\s*(?:Video\s*Prompt|Prompt\s*Video|Deskripsi\s*Video|Video\s*Description|Video)\s*\*?\s*:\s*(.*)/i;
+  } else {
+    regex = /(?:💬|💬️)?\s*\*?\*?\s*(?:Dialogue|Dialog|Percakapan|Suara|Bicara|Speech)\s*\*?\*?\s*:\s*(.*)/i;
+  }
+  
+  const match = sceneText.match(regex);
+  if (match && match[1]) {
+    return match[1].replace(/^\*+/, "").replace(/\*+$/, "").replace(/^['"]+/, "").replace(/['"]+$/, "").trim();
+  }
+  
+  // Extra lazy fallback: Find first line starts with 🖼 or has "Prompt Gambar" etc. and split by colon
+  for (let line of lines) {
+    line = line.trim();
+    if (fieldType === "image" && (line.includes("🖼") || line.toLowerCase().includes("gambar"))) {
+      const idx = line.indexOf(":");
+      if (idx !== -1) return line.substring(idx + 1).replace(/^\*+/, "").replace(/\*+$/, "").trim();
+    }
+    if (fieldType === "video" && (line.includes("🎥") || line.toLowerCase().includes("video"))) {
+      const idx = line.indexOf(":");
+      if (idx !== -1) return line.substring(idx + 1).replace(/^\*+/, "").replace(/\*+$/, "").trim();
+    }
+    if (fieldType === "dialogue" && (line.includes("💬") || line.toLowerCase().includes("dialog") || line.toLowerCase().includes("suara"))) {
+      const idx = line.indexOf(":");
+      if (idx !== -1) return line.substring(idx + 1).replace(/^\*+/, "").replace(/\*+$/, "").trim();
+    }
+  }
+  
+  return "";
+};
+
 export default function App() {
   const [user, setUser] = useState<User | null>(null);
   const [darkMode, setDarkMode] = useState<boolean>(() => {
@@ -1604,9 +1687,9 @@ export default function App() {
     const scenes = result.split("🎬").filter(s => s.trim());
     const rows = scenes.map(s => {
       const sceneTitle = s.split("\n")[0].trim();
-      const imagePrompt = s.match(/🖼 Image Prompt: (.*)/)?.[1] || "";
-      const videoPrompt = s.match(/🎥 Video Prompt: (.*)/)?.[1] || "";
-      const dialogue = s.match(/💬 Dialogue: (.*)/)?.[1] || "";
+      const imagePrompt = parseSceneField(s, "image");
+      const videoPrompt = parseSceneField(s, "video");
+      const dialogue = parseSceneField(s, "dialogue");
       return [`"${sceneTitle}"`, `"${imagePrompt}"`, `"${videoPrompt}"`, `"${dialogue}"`].join(",");
     });
     const csv = "Scene,Image Prompt,Video Prompt,Dialogue\n" + rows.join("\n");
@@ -1638,7 +1721,8 @@ export default function App() {
           }
         }
       });
-      for (const part of response.candidates[0].content.parts) {
+      const parts = response.candidates?.[0]?.content?.parts || [];
+      for (const part of parts) {
         if (part.inlineData) {
           const base64 = part.inlineData.data;
           setSceneImages(prev => ({ ...prev, [index]: `data:image/png;base64,${base64}` }));
@@ -2214,9 +2298,9 @@ export default function App() {
                       <div className="flex flex-col gap-6 sm:gap-8">
                         {result?.split("🎬").filter(s => s.trim()).map((scene, idx) => {
                           const lines = scene.split("\n").filter(l => l.trim());
-                          const imagePrompt = scene.match(/🖼 Image Prompt: (.*)/)?.[1] || "";
-                          const videoPrompt = scene.match(/🎥 Video Prompt: (.*)/)?.[1] || "";
-                          const dialogue = scene.match(/💬 Dialogue: (.*)/)?.[1] || "";
+                          const imagePrompt = parseSceneField(scene, "image");
+                          const videoPrompt = parseSceneField(scene, "video");
+                          const dialogue = parseSceneField(scene, "dialogue");
 
                           return (
                             <SceneCard
