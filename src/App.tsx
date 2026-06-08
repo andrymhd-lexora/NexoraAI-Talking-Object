@@ -535,84 +535,145 @@ function SceneCard({
 
 const parseSceneField = (sceneText: string, fieldType: "image" | "video" | "dialogue"): string => {
   const lines = sceneText.split("\n");
-  for (let line of lines) {
-    line = line.trim();
-    // Strip bullet points if any at the start, e.g. * or - or 1.
-    const cleanLine = line.replace(/^(?:[-*+•]|\d+\.)\s*/, "").trim();
-    const cleanHeader = cleanLine.replace(/^\*+/, "").replace(/\*+$/, "").trim();
+  
+  const getLabel = (l: string) => {
+    const colonIdx = l.indexOf(":");
+    return colonIdx !== -1 ? l.substring(0, colonIdx).trim().toLowerCase() : l.trim().toLowerCase();
+  };
+
+  const isImageLine = (l: string) => {
+    const label = getLabel(l);
+    if (label.includes("video") || label.includes("camera") || label.includes("kamera") || label.includes("movement") || label.includes("motion") || label.includes("pergerakan")) return false;
+    if (label.includes("dialog") || label.includes("dialogue") || label.includes("suara") || label.includes("narasi") || label.includes("narrator") || label.includes("narator") || label.includes("speech") || label.includes("audio") || label.includes("vocal") || label.includes("bicara") || label.includes("percakapan")) return false;
     
+    return l.includes("🖼") || 
+           l.includes("📷") || 
+           l.includes("🎨") ||
+           label.includes("image") || 
+           label.includes("gambar") || 
+           label.includes("visual") || 
+           label.includes("deskripsi") || 
+           label.includes("illustration") ||
+           label.includes("illustrasi") ||
+           label.includes("tampilan") ||
+           label.includes("prompt");
+  };
+
+  const isVideoLine = (l: string) => {
+    const label = getLabel(l);
+    if (label.includes("image") || label.includes("gambar") || label.includes("illustration") || label.includes("illustrasi") || label.includes("tampilan") || label.includes("visual") || label.includes("deskripsi") || label.includes("prompt")) return false;
+    if (label.includes("dialog") || label.includes("dialogue") || label.includes("suara") || label.includes("narasi") || label.includes("narrator") || label.includes("narator") || label.includes("speech") || label.includes("audio") || label.includes("vocal") || label.includes("bicara") || label.includes("percakapan")) return false;
+
+    return l.includes("🎥") || 
+           l.includes("📹") || 
+           l.includes("🎬") || 
+           label.includes("video") || 
+           label.includes("camera") || 
+           label.includes("kamera") || 
+           label.includes("pergerakan") || 
+           label.includes("movement") || 
+           label.includes("motion") ||
+           label.includes("render");
+  };
+
+  const isDialogueLine = (l: string) => {
+    const label = getLabel(l);
+    if (label.includes("image") || label.includes("gambar") || label.includes("illustration") || label.includes("illustrasi") || label.includes("tampilan") || label.includes("visual") || label.includes("deskripsi") || label.includes("prompt")) return false;
+    if (label.includes("video") || label.includes("camera") || label.includes("kamera") || label.includes("movement") || label.includes("motion") || label.includes("pergerakan") || label.includes("render")) return false;
+
+    return l.includes("💬") || 
+           l.includes("🔊") || 
+           l.includes("🗣") || 
+           l.includes("🎙") ||
+           label.includes("dialog") || 
+           label.includes("dialogue") || 
+           label.includes("suara") || 
+           label.includes("narasi") || 
+           label.includes("narrator") || 
+           label.includes("narator") || 
+           label.includes("speech") || 
+           label.includes("audio") || 
+           label.includes("vocal") || 
+           label.includes("bicara") || 
+           label.includes("percakapan");
+  };
+
+  const isOtherHeaderLine = (l: string, currentType: "image" | "video" | "dialogue") => {
+    if (l.includes("🎬") || l.toLowerCase().includes("scene")) return true;
+    if (currentType !== "image" && isImageLine(l)) return true;
+    if (currentType !== "video" && isVideoLine(l)) return true;
+    if (currentType !== "dialogue" && isDialogueLine(l)) return true;
+    return false;
+  };
+
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i].trim();
+    if (!line) continue;
+
+    let matched = false;
     if (fieldType === "image") {
-      // Look for indicators of image prompt: 🖼, or words "image prompt", "prompt gambar", "deskripsi gambar", etc.
-      if (
-        /^(?:🖼|🖼️|image|gambar)/i.test(cleanHeader) || 
-        /(?:image\s*prompt|prompt\s*gambar|deskripsi\s*gambar|image\s*description|gambar\s*prompt)/i.test(cleanLine)
-      ) {
-        const colonIdx = cleanLine.indexOf(":");
-        if (colonIdx !== -1) {
-          let content = cleanLine.substring(colonIdx + 1).trim();
-          content = content.replace(/^\*+/, "").replace(/\*+$/, "").replace(/^['"]+/, "").replace(/['"]+$/, "").trim();
-          if (content) return content;
-        }
-      }
+      matched = isImageLine(line);
     } else if (fieldType === "video") {
-      if (
-        /^(?:🎥|🎥️|video)/i.test(cleanHeader) || 
-        /(?:video\s*prompt|prompt\s*video|deskripsi\s*video|video\s*description)/i.test(cleanLine)
-      ) {
-        const colonIdx = cleanLine.indexOf(":");
-        if (colonIdx !== -1) {
-          let content = cleanLine.substring(colonIdx + 1).trim();
-          content = content.replace(/^\*+/, "").replace(/\*+$/, "").replace(/^['"]+/, "").replace(/['"]+$/, "").trim();
-          if (content) return content;
-        }
-      }
+      matched = isVideoLine(line);
     } else if (fieldType === "dialogue") {
-      if (
-        /^(?:💬|💬️|dialog|percayakah|suara|dialogue|bicara|percakapan)/i.test(cleanHeader) || 
-        /(?:dialogue|dialog|percakapan|suara|narasi|speech|bicara)/i.test(cleanLine)
-      ) {
-        const colonIdx = cleanLine.indexOf(":");
-        if (colonIdx !== -1) {
-          let content = cleanLine.substring(colonIdx + 1).trim();
-          content = content.replace(/^\*+/, "").replace(/\*+$/, "").replace(/^['"]+/, "").replace(/['"]+$/, "").trim();
-          if (content) return content;
+      matched = isDialogueLine(line);
+    }
+
+    if (matched) {
+      let content = "";
+      const colonIdx = line.indexOf(":");
+      if (colonIdx !== -1) {
+        content = line.substring(colonIdx + 1).trim();
+      }
+
+      const parts: string[] = [];
+      const cleanInline = content.replace(/^\*+/, "").replace(/\*+$/, "").trim();
+      if (cleanInline) {
+        parts.push(cleanInline);
+      }
+
+      for (let j = i + 1; j < lines.length; j++) {
+        const nextLine = lines[j].trim();
+        if (!nextLine) continue;
+        if (isOtherHeaderLine(nextLine, fieldType)) {
+          break;
         }
+        if (fieldType === "image" && isImageLine(nextLine)) break;
+        if (fieldType === "video" && isVideoLine(nextLine)) break;
+        if (fieldType === "dialogue" && isDialogueLine(nextLine)) break;
+
+        const cleanNextLine = nextLine.replace(/^(?:[-*+•]|\d+\.)\s*/, "").trim();
+        parts.push(cleanNextLine);
+      }
+
+      let finalContent = parts.join("\n").trim();
+      finalContent = finalContent
+        .replace(/^\*+/, "")
+        .replace(/\*+$/, "")
+        .replace(/^['"]+/, "")
+        .replace(/['"]+$/, "")
+        .trim();
+
+      if (finalContent) {
+        return finalContent;
       }
     }
   }
-  
-  // Fallback regex match if the per-line check missed it
+
   let regex;
   if (fieldType === "image") {
-    regex = /(?:🖼|🖼️)?\s*\*?\*?\s*(?:Image\s*Prompt|Prompt\s*Gambar|Deskripsi\s*Gambar|Image\s*Description|Gambar)\s*\*?\*?\s*:\s*(.*)/i;
+    regex = /(?:🖼|🖼️)?\s*\*?\*?\s*(?:Image\s*Prompt|Prompt\s*Gambar|Deskripsi\s*Gambar|Image\s*Description|Gambar|Visual)\s*\*?\*?\s*:\s*(.*)/i;
   } else if (fieldType === "video") {
-    regex = /(?:🎥|🎥️)?\s*\*?\*?\s*(?:Video\s*Prompt|Prompt\s*Video|Deskripsi\s*Video|Video\s*Description|Video)\s*\*?\s*:\s*(.*)/i;
+    regex = /(?:🎥|🎥️)?\s*\*?\*?\s*(?:Video\s*Prompt|Prompt\s*Video|Deskripsi\s*Video|Video\s*Description|Video|Kamera|Pergerakan)\s*\*?\s*:\s*(.*)/i;
   } else {
-    regex = /(?:💬|💬️)?\s*\*?\*?\s*(?:Dialogue|Dialog|Percakapan|Suara|Bicara|Speech)\s*\*?\*?\s*:\s*(.*)/i;
+    regex = /(?:💬|💬️)?\s*\*?\*?\s*(?:Dialogue|Dialog|Percakapan|Suara|Bicara|Speech|Narasi)\s*\*?\s*:\s*(.*)/i;
   }
   
   const match = sceneText.match(regex);
   if (match && match[1]) {
     return match[1].replace(/^\*+/, "").replace(/\*+$/, "").replace(/^['"]+/, "").replace(/['"]+$/, "").trim();
   }
-  
-  // Extra lazy fallback: Find first line starts with 🖼 or has "Prompt Gambar" etc. and split by colon
-  for (let line of lines) {
-    line = line.trim();
-    if (fieldType === "image" && (line.includes("🖼") || line.toLowerCase().includes("gambar"))) {
-      const idx = line.indexOf(":");
-      if (idx !== -1) return line.substring(idx + 1).replace(/^\*+/, "").replace(/\*+$/, "").trim();
-    }
-    if (fieldType === "video" && (line.includes("🎥") || line.toLowerCase().includes("video"))) {
-      const idx = line.indexOf(":");
-      if (idx !== -1) return line.substring(idx + 1).replace(/^\*+/, "").replace(/\*+$/, "").trim();
-    }
-    if (fieldType === "dialogue" && (line.includes("💬") || line.toLowerCase().includes("dialog") || line.toLowerCase().includes("suara"))) {
-      const idx = line.indexOf(":");
-      if (idx !== -1) return line.substring(idx + 1).replace(/^\*+/, "").replace(/\*+$/, "").trim();
-    }
-  }
-  
+
   return "";
 };
 
@@ -755,7 +816,10 @@ export default function App() {
   const [copiedWebhook, setCopiedWebhook] = useState<boolean>(false);
 
   const getGeminiClient = () => {
-    const key = geminiApiKey || process.env.GEMINI_API_KEY || "";
+    const key = geminiApiKey || 
+                (typeof process !== "undefined" && process?.env ? process.env.GEMINI_API_KEY : "") || 
+                (typeof import.meta !== "undefined" && (import.meta as any).env ? (import.meta as any).env.VITE_GEMINI_API_KEY : "") || 
+                "";
     return new GoogleGenAI({ 
       apiKey: key,
       httpOptions: {
@@ -1435,7 +1499,7 @@ export default function App() {
       
       for (let i = 0; i < scenes.length; i++) {
         const scene = scenes[i];
-        const dialogue = scene.match(/💬 Dialogue: (.*)/)?.[1] || "";
+        const dialogue = parseSceneField(scene, "dialogue");
         if (dialogue) {
           const bytes = await playVoice(dialogue, false, i, true) as Uint8Array;
           if (bytes) audioChunks.push(bytes);
@@ -1529,7 +1593,7 @@ export default function App() {
     for (let i = 0; i < scenes.length; i++) {
       if (!isPlayingFullScriptRef.current) break; // Check if stopped
       const scene = scenes[i];
-      const dialogue = scene.match(/💬 Dialogue: (.*)/)?.[1] || "";
+      const dialogue = parseSceneField(scene, "dialogue");
       if (dialogue) {
         setPlayingSceneIdx(i);
         await playVoice(dialogue, false, i);
@@ -1712,7 +1776,8 @@ export default function App() {
   const generateSceneImage = async (prompt: string, index: number) => {
     setGeneratingSceneIdx(index);
     try {
-      const response = await ai.models.generateContent({
+      const genAI = getGeminiClient();
+      const response = await genAI.models.generateContent({
         model: "gemini-2.5-flash-image",
         contents: { parts: [{ text: prompt }] },
         config: {
