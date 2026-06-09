@@ -1608,6 +1608,94 @@ export default function App() {
     playVoice(text, true);
   };
 
+  const generateImageWithFallback = async (prompt: string, aspectRatio: "1:1" | "3:4" | "4:3" | "9:16" | "16:9" = "9:16"): Promise<string> => {
+    const genAI = getGeminiClient();
+    
+    // Attempt 1: Try gemini-2.5-flash-image (generateContent)
+    try {
+      console.log("Attempting image generation with gemini-2.5-flash-image...");
+      const response = await genAI.models.generateContent({
+        model: "gemini-2.5-flash-image",
+        contents: prompt,
+        config: {
+          imageConfig: {
+            aspectRatio
+          }
+        }
+      });
+      const part = response.candidates?.[0]?.content?.parts?.find(p => p.inlineData);
+      if (part?.inlineData?.data) {
+        const mimeType = part.inlineData.mimeType || "image/png";
+        return `data:${mimeType};base64,${part.inlineData.data}`;
+      }
+    } catch (err) {
+      console.warn("gemini-2.5-flash-image failed, falling back to gemini-3.1-flash-image...", err);
+    }
+
+    // Attempt 1.5: Try gemini-3.1-flash-image (generateContent)
+    try {
+      console.log("Attempting image generation with gemini-3.1-flash-image...");
+      const response = await genAI.models.generateContent({
+        model: "gemini-3.1-flash-image",
+        contents: prompt,
+        config: {
+          imageConfig: {
+            aspectRatio
+          }
+        }
+      });
+      const part = response.candidates?.[0]?.content?.parts?.find(p => p.inlineData);
+      if (part?.inlineData?.data) {
+        const mimeType = part.inlineData.mimeType || "image/png";
+        return `data:${mimeType};base64,${part.inlineData.data}`;
+      }
+    } catch (err) {
+      console.warn("gemini-3.1-flash-image failed, falling back to imagen-3.0-generate-002...", err);
+    }
+
+    // Attempt 2: Try imagen-3.0-generate-002 (generateImages)
+    try {
+      console.log("Attempting image generation with imagen-3.0-generate-002...");
+      const response = await genAI.models.generateImages({
+        model: "imagen-3.0-generate-002",
+        prompt: prompt,
+        config: {
+          numberOfImages: 1,
+          outputMimeType: "image/png",
+          aspectRatio
+        }
+      });
+      const bytes = response.generatedImages?.[0]?.image?.imageBytes;
+      if (bytes) {
+        return `data:image/png;base64,${bytes}`;
+      }
+    } catch (err) {
+      console.warn("imagen-3.0-generate-002 failed, falling back to imagen-3.0-capability-001...", err);
+    }
+
+    // Attempt 3: Try imagen-3.0-capability-001 (generateImages)
+    try {
+      console.log("Attempting image generation with imagen-3.0-capability-001...");
+      const response = await genAI.models.generateImages({
+        model: "imagen-3.0-capability-001",
+        prompt: prompt,
+        config: {
+          numberOfImages: 1,
+          outputMimeType: "image/png",
+          aspectRatio
+        }
+      });
+      const bytes = response.generatedImages?.[0]?.image?.imageBytes;
+      if (bytes) {
+        return `data:image/png;base64,${bytes}`;
+      }
+    } catch (err) {
+      console.error("All image generation options failed:", err);
+    }
+
+    throw new Error("Gagal memproses gambar AI. Mohon cek apakah API Key Anda aktif, tipe Gemini yang dipilih memiliki kuota, atau coba sesaat lagi.");
+  };
+
   const generateCharacterImage = async (obj: string) => {
     if (!obj) return;
     setIsGeneratingImage(true);
@@ -1619,26 +1707,11 @@ export default function App() {
         prompt = `3D Pixar style character of a cute 3D ${customAvatar.bodyShape} named "${customAvatar.name}", primary color is vivid "${customAvatar.colorHex}", has a cute ${customAvatar.facialFeature} styling, wearing ${customAvatar.clothing !== 'none' ? customAvatar.clothing : 'minimal outfits'} and accessory: ${customAvatar.accessory !== 'none' ? customAvatar.accessory : 'clean look'}, ultra glossy finish, big expressive anime eyes, small smiling mouth, cute soft render proportions, cinematic studio lighting, solid clean white background.`;
       }
       
-      const genAI = getGeminiClient();
-      const response = await genAI.models.generateContent({
-        model: "gemini-2.5-flash-image",
-        contents: { parts: [{ text: prompt }] },
-        config: {
-          imageConfig: {
-            aspectRatio: "9:16"
-          }
-        }
-      });
-
-      const part = response.candidates?.[0]?.content?.parts.find(p => p.inlineData);
-      if (part?.inlineData) {
-        const mimeType = part.inlineData.mimeType || "image/png";
-        setCharacterImage(`data:${mimeType};base64,${part.inlineData.data}`);
-      } else {
-        console.warn("No image data in response", response);
-      }
-    } catch (err) {
+      const imageUrl = await generateImageWithFallback(prompt, "9:16");
+      setCharacterImage(imageUrl);
+    } catch (err: any) {
       console.error("Image generation failed:", err);
+      setError(err?.message || "Gagal membuat avatar karakter. Silakan coba lagi.");
     } finally {
       setIsGeneratingImage(false);
     }
@@ -1776,27 +1849,12 @@ export default function App() {
   const generateSceneImage = async (prompt: string, index: number) => {
     setGeneratingSceneIdx(index);
     try {
-      const genAI = getGeminiClient();
-      const response = await genAI.models.generateContent({
-        model: "gemini-2.5-flash-image",
-        contents: { parts: [{ text: prompt }] },
-        config: {
-          imageConfig: {
-            aspectRatio: "9:16"
-          }
-        }
-      });
-      const parts = response.candidates?.[0]?.content?.parts || [];
-      for (const part of parts) {
-        if (part.inlineData) {
-          const base64 = part.inlineData.data;
-          setSceneImages(prev => ({ ...prev, [index]: `data:image/png;base64,${base64}` }));
-          break;
-        }
-      }
-    } catch (err) {
+      const selectedRatio = selections.ratio === "16:9" || selections.ratio === "9:16" ? selections.ratio : "9:16";
+      const imageUrl = await generateImageWithFallback(prompt, selectedRatio as "9:16" | "16:9");
+      setSceneImages(prev => ({ ...prev, [index]: imageUrl }));
+    } catch (err: any) {
       console.error("Scene image generation failed:", err);
-      setError("Gagal membuat gambar scene. Silakan coba lagi.");
+      setError(err?.message || "Gagal membuat gambar scene. Silakan coba lagi.");
     } finally {
       setGeneratingSceneIdx(null);
     }
