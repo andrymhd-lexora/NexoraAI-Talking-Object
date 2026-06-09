@@ -1611,33 +1611,12 @@ export default function App() {
   const generateImageWithFallback = async (prompt: string, aspectRatio: "1:1" | "3:4" | "4:3" | "9:16" | "16:9" = "9:16"): Promise<string> => {
     const genAI = getGeminiClient();
     
-    // Attempt 1: Try gemini-2.5-flash-image (generateContent)
-    try {
-      console.log("Attempting image generation with gemini-2.5-flash-image...");
-      const response = await genAI.models.generateContent({
-        model: "gemini-2.5-flash-image",
-        contents: prompt,
-        config: {
-          imageConfig: {
-            aspectRatio
-          }
-        }
-      });
-      const part = response.candidates?.[0]?.content?.parts?.find(p => p.inlineData);
-      if (part?.inlineData?.data) {
-        const mimeType = part.inlineData.mimeType || "image/png";
-        return `data:${mimeType};base64,${part.inlineData.data}`;
-      }
-    } catch (err) {
-      console.warn("gemini-2.5-flash-image failed, falling back to gemini-3.1-flash-image...", err);
-    }
-
-    // Attempt 1.5: Try gemini-3.1-flash-image (generateContent)
+    // Attempt 1: Try gemini-3.1-flash-image (generateContent) - prioritized as requested by user
     try {
       console.log("Attempting image generation with gemini-3.1-flash-image...");
       const response = await genAI.models.generateContent({
         model: "gemini-3.1-flash-image",
-        contents: prompt,
+        contents: { parts: [{ text: prompt }] },
         config: {
           imageConfig: {
             aspectRatio
@@ -1650,10 +1629,31 @@ export default function App() {
         return `data:${mimeType};base64,${part.inlineData.data}`;
       }
     } catch (err) {
-      console.warn("gemini-3.1-flash-image failed, falling back to imagen-3.0-generate-002...", err);
+      console.warn("gemini-3.1-flash-image failed, falling back to gemini-2.5-flash-image...", err);
     }
 
-    // Attempt 2: Try imagen-3.0-generate-002 (generateImages)
+    // Attempt 2: Try gemini-2.5-flash-image (generateContent)
+    try {
+      console.log("Attempting image generation with gemini-2.5-flash-image...");
+      const response = await genAI.models.generateContent({
+        model: "gemini-2.5-flash-image",
+        contents: { parts: [{ text: prompt }] },
+        config: {
+          imageConfig: {
+            aspectRatio
+          }
+        }
+      });
+      const part = response.candidates?.[0]?.content?.parts?.find(p => p.inlineData);
+      if (part?.inlineData?.data) {
+        const mimeType = part.inlineData.mimeType || "image/png";
+        return `data:${mimeType};base64,${part.inlineData.data}`;
+      }
+    } catch (err) {
+      console.warn("gemini-2.5-flash-image failed, falling back to imagen-3.0-generate-002...", err);
+    }
+
+    // Attempt 3: Try imagen-3.0-generate-002 (generateImages)
     try {
       console.log("Attempting image generation with imagen-3.0-generate-002...");
       const response = await genAI.models.generateImages({
@@ -1673,7 +1673,7 @@ export default function App() {
       console.warn("imagen-3.0-generate-002 failed, falling back to imagen-3.0-capability-001...", err);
     }
 
-    // Attempt 3: Try imagen-3.0-capability-001 (generateImages)
+    // Attempt 4: Try imagen-3.0-capability-001 (generateImages)
     try {
       console.log("Attempting image generation with imagen-3.0-capability-001...");
       const response = await genAI.models.generateImages({
