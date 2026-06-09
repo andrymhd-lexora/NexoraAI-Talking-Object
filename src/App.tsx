@@ -4,7 +4,7 @@
  */
 
 import { useState, useEffect, useRef } from "react";
-import { GoogleGenAI, Modality } from "@google/genai";
+import { GoogleGenAI, Modality, SafetyFilterLevel } from "@google/genai";
 import { motion, AnimatePresence } from "motion/react";
 import { 
   Sparkles, 
@@ -1608,19 +1608,48 @@ export default function App() {
     playVoice(text, true);
   };
 
-  const generateImageWithFallback = async (prompt: string, aspectRatio: "1:1" | "3:4" | "4:3" | "9:16" | "16:9" = "9:16"): Promise<string> => {
+  const generateImageWithFallback = async (
+    prompt: string, 
+    aspectRatio: "1:1" | "3:4" | "4:3" | "9:16" | "16:9" = "9:16",
+    safety_settings?: any[]
+  ): Promise<string> => {
     const genAI = getGeminiClient();
+    
+    // Default extremely permissive safety settings if not provided
+    const defaultSafetySettings = safety_settings || [
+      {
+        category: "HARM_CATEGORY_HATE_SPEECH",
+        threshold: "BLOCK_NONE"
+      },
+      {
+        category: "HARM_CATEGORY_HARASSMENT",
+        threshold: "BLOCK_NONE"
+      },
+      {
+        category: "HARM_CATEGORY_SEXUALLY_EXPLICIT",
+        threshold: "BLOCK_NONE"
+      },
+      {
+        category: "HARM_CATEGORY_DANGEROUS_CONTENT",
+        threshold: "BLOCK_NONE"
+      },
+      {
+        category: "HARM_CATEGORY_CIVIC_INTEGRITY",
+        threshold: "BLOCK_NONE"
+      }
+    ];
     
     // Attempt 1: Try gemini-3.1-flash-image (generateContent) - prioritized as requested by user
     try {
-      console.log("Attempting image generation with gemini-3.1-flash-image...");
+      console.log("Attempting image generation with gemini-3.1-flash-image and permissive safety settings...");
       const response = await genAI.models.generateContent({
         model: "gemini-3.1-flash-image",
         contents: { parts: [{ text: prompt }] },
         config: {
           imageConfig: {
             aspectRatio
-          }
+          },
+          safetySettings: defaultSafetySettings
         }
       });
       const part = response.candidates?.[0]?.content?.parts?.find(p => p.inlineData);
@@ -1634,14 +1663,15 @@ export default function App() {
 
     // Attempt 2: Try gemini-2.5-flash-image (generateContent)
     try {
-      console.log("Attempting image generation with gemini-2.5-flash-image...");
+      console.log("Attempting image generation with gemini-2.5-flash-image and permissive safety settings...");
       const response = await genAI.models.generateContent({
         model: "gemini-2.5-flash-image",
         contents: { parts: [{ text: prompt }] },
         config: {
           imageConfig: {
             aspectRatio
-          }
+          },
+          safetySettings: defaultSafetySettings
         }
       });
       const part = response.candidates?.[0]?.content?.parts?.find(p => p.inlineData);
@@ -1662,7 +1692,8 @@ export default function App() {
         config: {
           numberOfImages: 1,
           outputMimeType: "image/png",
-          aspectRatio
+          aspectRatio,
+          safetyFilterLevel: SafetyFilterLevel.BLOCK_NONE
         }
       });
       const bytes = response.generatedImages?.[0]?.image?.imageBytes;
@@ -1682,7 +1713,8 @@ export default function App() {
         config: {
           numberOfImages: 1,
           outputMimeType: "image/png",
-          aspectRatio
+          aspectRatio,
+          safetyFilterLevel: SafetyFilterLevel.BLOCK_NONE
         }
       });
       const bytes = response.generatedImages?.[0]?.image?.imageBytes;
@@ -1696,7 +1728,7 @@ export default function App() {
     throw new Error("Gagal memproses gambar AI. Mohon cek apakah API Key Anda aktif, tipe Gemini yang dipilih memiliki kuota, atau coba sesaat lagi.");
   };
 
-  const generateCharacterImage = async (obj: string) => {
+  const generateCharacterImage = async (obj: string, safety_settings?: any[]) => {
     if (!obj) return;
     setIsGeneratingImage(true);
     setCharacterImage(null);
@@ -1707,7 +1739,7 @@ export default function App() {
         prompt = `3D Pixar style character of a cute 3D ${customAvatar.bodyShape} named "${customAvatar.name}", primary color is vivid "${customAvatar.colorHex}", has a cute ${customAvatar.facialFeature} styling, wearing ${customAvatar.clothing !== 'none' ? customAvatar.clothing : 'minimal outfits'} and accessory: ${customAvatar.accessory !== 'none' ? customAvatar.accessory : 'clean look'}, ultra glossy finish, big expressive anime eyes, small smiling mouth, cute soft render proportions, cinematic studio lighting, solid clean white background.`;
       }
       
-      const imageUrl = await generateImageWithFallback(prompt, "9:16");
+      const imageUrl = await generateImageWithFallback(prompt, "9:16", safety_settings);
       setCharacterImage(imageUrl);
     } catch (err: any) {
       console.error("Image generation failed:", err);
